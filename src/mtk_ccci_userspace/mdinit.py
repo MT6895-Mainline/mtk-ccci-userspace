@@ -2577,8 +2577,11 @@ def post_ready_log_bringup():
                          name=os.path.basename(_p)).start()
 
 
-threading.Thread(target=post_ready_log_bringup, daemon=True,
-                 name="post_ready_log").start()
+# MDLOG access is not part of the public service's normal startup contract.
+# The existing diagnostic path remains opt-in and must be board-validated.
+if os.environ.get("MTK_CCCI_ENABLE_MDLOG") == "1":
+    threading.Thread(target=post_ready_log_bringup, daemon=True,
+                     name="post_ready_log").start()
 
 
 # ---------------------------------------------------------------------------

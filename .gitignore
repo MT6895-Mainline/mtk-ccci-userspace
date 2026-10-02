@@ -6,6 +6,9 @@ __pycache__/
 .coverage
 coverage.xml
 build/
+_build*/
+_install-root/
+.build-tools/
 dist/
 *.egg-info/
 evidence/
