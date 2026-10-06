@@ -2,6 +2,7 @@ import test_rpc_sar
 import test_source_safety
 import test_launcher
 import test_fs_contract
+import test_pearl_bringup
 
 
 def main():
@@ -17,7 +18,15 @@ def main():
     test_fs_contract.test_frames_and_path_guards()
     test_fs_contract.test_cmpt_writes_only_overlay()
     test_fs_contract.test_private_drive_and_missing_ota()
-    print("PASS: 12 userspace source, RPC, FS, and launcher checks")
+    test_pearl_bringup.test_paths_are_configurable()
+    test_pearl_bringup.test_data_config_parsing_ignores_comments_and_spaces()
+    test_pearl_bringup.test_cid_to_ccmni_mapping()
+    test_pearl_bringup.test_verify_step_exists()
+    test_pearl_bringup.test_registration_is_waited_for()
+    test_pearl_bringup.test_at_port_is_taken_exclusively()
+    test_pearl_bringup.test_rat_default_is_documented()
+    test_pearl_bringup.test_mm_tune_is_optional()
+    print("PASS: 20 userspace source, RPC, FS, launcher and pearl checks")
 
 
 if __name__ == "__main__":

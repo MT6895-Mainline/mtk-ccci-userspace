@@ -1,0 +1,24 @@
+# 移动数据配置（安装到 /etc/mtk-ccci/data.conf）
+#
+# data_up.py 读取这个文件；也可以用 MTK_CCCI_DATA_CONF 指向别处。
+#
+# APN：MTK 数据面走 ccmni 网卡而不是 PPP，PDP 必须自己激活。
+#      实测（中国移动 / pearl）用运营商下发的 APN 才能激活成功：
+#        cmnet.mnc000.mcc460.gprs   -> OK
+#        cmnet                      -> +CME ERROR: 5848, CEER 63 CM_SER_UNAVAILABLE
+#      不同运营商/地区请改成自己的 APN，留空则只尝试网络下发的 APN。
+APN=cmnet.mnc000.mcc460.gprs
+
+# 起始 cid。cid N 对应 ccmni(N-1)：cid 1 -> ccmni0。
+# data_up.py 会从 CID 开始连续试 4 个 cid（激活后 ping 验证，不通就换下一个），
+# 因为刚开机时第一个 PDP 有时会在模组侧绑定到坏掉的数据面。
+CID=1
+
+# 默认路由 metric。比 WiFi 的 600 大 => 有 WiFi 走 WiFi，没 WiFi 自动走流量。
+METRIC=1000
+
+# 激活后用来验证数据面真的通了的目标（ping）。设空则跳过验证。
+VERIFY_HOST=223.5.5.5
+
+# 拿不到运营商下发 DNS 时的兜底（逗号分隔）。
+DNS_FALLBACK=211.139.5.28,211.139.5.27

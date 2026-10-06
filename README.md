@@ -28,6 +28,17 @@ The publication copy passes 12 host checks for FS, RPC, source hygiene and
 launcher guards, plus Meson staging-install/entrypoint checks. It has not
 replaced the live bring-up owner and is not a validated automatic boot service.
 
+## Board: pearl (MT6895 / Redmi Note 12T Pro)
+
+This branch carries the pearl integration: the AT bring-up (`at_cfun.py`),
+mobile-data bring-up (`data_up.py`, MTK ccmni + PDP, not PPP), ModemManager
+signal polling (`mm_tune.py`), the matching systemd/udev examples, and
+`docs/PEARL.md` with the observed root causes (data-path HIF, APN, activation
+timing, NetworkManager churn) plus the current voice/IMS status.
+
+Set `MTK_CCCI_BOARD=pearl`, `MTK_CCCI_RAT=15` (enables NR on this firmware) and
+configure `/etc/mtk-ccci/data.conf` with the operator APN.
+
 ## Layout
 
 ```text

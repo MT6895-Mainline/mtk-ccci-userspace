@@ -1,0 +1,10 @@
+# 让 ModemManager 排在我们的基带/数据 bring-up 之后。
+#
+# 只有 systemd 的 After= 是不够的：NetworkManager 会在开机早期通过 D-Bus
+# 把 ModemManager 拉起来，绕过单元顺序。data_up.py 因此自己会临时停掉
+# ModemManager 来独占 AT 口（详见 docs/PEARL.md）。
+#
+# 安装到：/etc/systemd/system/ModemManager.service.d/10-pearl-ccci.conf
+[Unit]
+After=mtk-ccci-owner.service mtk-ccci-at-cfun.service mtk-ccci-data.service
+Wants=mtk-ccci-at-cfun.service mtk-ccci-data.service

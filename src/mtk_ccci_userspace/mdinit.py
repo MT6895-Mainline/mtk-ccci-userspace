@@ -457,6 +457,35 @@ rpc_fd = None
 
 
 CCCI_IOC_DO_STOP_MD = (0x43 << 8) | 12    # _IO("C", 12)
+# PEARL-MDRECOVER-1: ccci_mdinit calls these in its exception path; our
+# owner never did, so after the (normal, Android-also-has-it)
+# custom_nvram_sec assert the modem stayed in EXCEPTION forever while
+# Android's mdinit restarted it and settled.  Verified by disassembling
+# the stock binary: ioctl _IO('C',12) DO_STOP_MD, _IO('C',45)
+# RESET_MD1_MD3_PCCIF, _IO('C',13) DO_START_MD appear repeatedly.
+CCCI_IOC_RESET_MD1_MD3_PCCIF = (0x43 << 8) | 45   # _IO("C", 45)
+# PEARL-MDRECOVER-4: DO_STOP_MD only parks the modem's state machine back
+# in BOOTING (5 -> 7 -> 1) without re-running fsm_routine_boot, so the modem
+# never reaches HS1.  DO_MD_RST is the hard reset that makes the FSM run the
+# full boot sequence again.  Default = use DO_MD_RST; set
+# PEARL_MDRECOVER_USERST=0 to go back to DO_STOP_MD.
+CCCI_IOC_DO_MD_RST = (0x43 << 8) | 6   # _IO("C", 6)
+# PEARL-MDRECOVER-5: CCCI_IOC_MD_RESET (C,0) is the one that matters.  In
+# ccci_fsm_ioctl.c it sends CCCI_MD_MSG_RESET_REQUEST and injects
+# MD_STA_EV_RESET_REQUEST -- i.e. it makes the FSM run its full boot again.
+# DO_STOP_MD (C,12) only appends CCCI_COMMAND_STOP, which is why the modem
+# was parked in BOOTING (5 -> 7 -> 1) and never reached HS1.  DO_MD_RST (C,6)
+# is not implemented in this tree (ENOTTY).  Default = MD_RESET.
+CCCI_IOC_MD_RESET = (0x43 << 8) | 0   # _IO("C", 0)
+# PEARL-SIMLOCK-1: ccci_mdinit calls CCCI_IOC_SIM_LOCK_RANDOM_PATTERN
+# (_IOW('C',46,unsigned int), 0x4004432e).  The kernel handler is
+#   case SIM_LOCK_RANDOM_PATTERN:
+#       fsm_monitor_send_message(md_id, CCCI_MD_MSG_RANDOM_PATTERN, 0);
+# i.e. it pushes CCCI_MD_MSG_RANDOM_PATTERN at the modem and IGNORES the
+# ioctl argument.  This owner never issued it, so the modem never saw that
+# message -- and custom_nvram_sec (the IMEI / SIM-lock security module) is
+# exactly the code that asserts here with para0 = -1001.
+CCCI_IOC_SIM_LOCK_RANDOM_PATTERN = 0x4004432e   # _IOW("C", 46, unsigned int)
 
 
 def md_stop_hw():
@@ -2448,9 +2477,14 @@ MD_TIME_TZ = int(os.environ.get("QQC_MD_TIME_TZ", "0"))
 
 
 def time_sync(ipc_fd):
-    # READY lands ~2 s after DO_START_MD in every run so far; give it 5 s and
-    # retry, because the kernel send fails harmlessly if the modem is not up.
-    time.sleep(5)
+    # PEARL-TIMESYNC-1: the modem reaches READY ~1.6 s after DO_START_MD and
+    # then asserts (EXCEPTION) ~2.3 s later.  The old 5 s initial sleep meant
+    # EVERY UPDATE_TIME attempt landed outside the READY window, so the gate
+    # in port_proxy.c (md_state != READY -> reject) returned -19 (ENODEV) all
+    # 20 times and the modem never received the wall clock.
+    #   CTime update: ...   (never observed in the log)
+    # Start immediately and retry fast so at least one send lands in-window.
+    time.sleep(0.3)
     for attempt in range(1, 21):
         try:
             r_tz = fcntl.ioctl(ipc_fd, CCCI_IPC_UPDATE_TIMEZONE, MD_TIME_TZ)
@@ -2463,9 +2497,9 @@ def time_sync(ipc_fd):
         log("v456 time_sync attempt %d: UPDATE_TIMEZONE=%d UPDATE_TIME=%d tz=%d"
             % (attempt, r_tz, r, MD_TIME_TZ))
         if isinstance(r, int) and r >= 0:
-            log("v456 time_sync: modem clock delivered")
+            log("v456 time_sync: modem clock delivered (PEARL-TIMESYNC-1)")
             return
-        time.sleep(3)
+        time.sleep(0.4)
     log("v456 time_sync: gave up after 20 attempts")
 
 
@@ -2638,6 +2672,200 @@ threading.Thread(target=post_ready_stock_ioctls, daemon=True,
 if ipc_fd is not None:
     threading.Thread(target=time_sync, args=(ipc_fd,), daemon=True,
                      name="time_sync").start()
+
+# ---------------------------------------------------------------------------
+# PEARL-MDRECOVER-1 -- the missing stock-AP action.
+#
+# Android and Linux BOTH hit the custom_nvram_sec -1001 assert (it is a
+# normal event).  The difference is what happens next: stock ccci_mdinit
+# restarts the modem (DO_STOP_MD -> RESET_MD1_MD3_PCCIF -> DO_START_MD and
+# re-send of boot data / time / battery / SIM cfg) and the modem comes back
+# and stays READY.  Our owner started it once and then only logged "alive".
+#
+# This supervisor polls the user-visible MD state and performs that restart
+# sequence on EXCEPTION, with a bounded retry count.  NV is untouched: all
+# modem NVRAM writes still go through the COW overlay.
+# ---------------------------------------------------------------------------
+def _md_user_state():
+    try:
+        _b = bytearray(struct.pack("<I", 0))
+        fcntl.ioctl(mon_fd, CCCI_IOC_GET_MD_STATE, _b, True)
+        return struct.unpack("<I", _b)[0]
+    except OSError:
+        return -1
+
+
+def recover_md(attempt):
+    log("MDRECOVER: attempt %d -- MD in EXCEPTION, restarting" % attempt)
+    # 1) stop -- PEARL-MDRECOVER-6: DO_STOP_MD from EXCEPTION is legal and does
+    # end in CCCI_FSM_GATED (see fsm_routine_stop: it explicitly accepts
+    # CCCI_FSM_EXCEPTION and falls through to `curr_state = CCCI_FSM_GATED`).
+    # The bug was TIMING: the owner waited only 1 s before DO_START_MD, but
+    # fsm_routine_stop polls the modem, runs the EE check and stops the hardware
+    # -- far longer.  DO_START_MD therefore arrived while curr_state was still
+    # CCCI_FSM_STOPPING, fsm_routine_start took the `!= CCCI_FSM_GATED` branch
+    # and called fsm_routine_zombie(), so the boot never ran and the modem parked
+    # in BOOTING.  Wait for the user-visible state to return to 0 (GATED) first.
+    #
+    # PEARL-MDRECOVER-2 note: OFF by default.  The FSM already performs
+    # its own restart (md_state 5 -> 7 -> 1) when the modem faults; issuing
+    # DO_STOP_MD/DO_START_MD on top of that fights the FSM and leaves the modem
+    # parked in BOOTING.  Set PEARL_MDRECOVER_STOPSTART=1 to restore the old
+    # behaviour.
+    if os.environ.get("PEARL_MDRECOVER_STOPSTART", "1") == "1":
+        try:
+            _mode = os.environ.get("PEARL_MDRECOVER_RESET", "stop")
+            if _mode == "stop":
+                _buf = bytearray(struct.pack("<I", 0))   # 0 = normal stop
+                log("MDRECOVER: DO_STOP_MD -> %d"
+                    % fcntl.ioctl(mon_fd, CCCI_IOC_DO_STOP_MD, _buf, True))
+            elif _mode == "md_rst":
+                log("MDRECOVER: DO_MD_RST -> %d"
+                    % fcntl.ioctl(mon_fd, CCCI_IOC_DO_MD_RST, 0))
+            else:
+                log("MDRECOVER: MD_RESET(C,0) -> %d"
+                    % fcntl.ioctl(mon_fd, CCCI_IOC_MD_RESET, 0))
+        except OSError as e:
+            log("MDRECOVER: reset failed: %s" % e)
+        # wait for GATED (user-visible MD state 0) before starting, else
+    # fsm_routine_start zombies out.  Bounded so we never hang.
+    _g = 0
+    while _g < 40:
+        if _md_user_state() == 0:
+            log("MDRECOVER: FSM reached GATED after %.1fs" % (_g * 0.5))
+            break
+        time.sleep(0.5)
+        _g += 1
+    if _g >= 40:
+        log("MDRECOVER: FSM did not reach GATED in 20s (state=%d)"
+            % _md_user_state())
+    # 2) reset the MD1/MD3 PCCIF -- the step our owner never had
+    try:
+        log("MDRECOVER: RESET_MD1_MD3_PCCIF -> %d"
+            % fcntl.ioctl(mon_fd, CCCI_IOC_RESET_MD1_MD3_PCCIF, 0))
+    except OSError as e:
+        log("MDRECOVER: RESET_MD1_MD3_PCCIF failed: %s" % e)
+    time.sleep(1.0)
+    # 3) start again -- same gate as (1); the FSM owns the restart.
+    if os.environ.get("PEARL_MDRECOVER_STOPSTART", "1") == "1":
+        try:
+            log("MDRECOVER: DO_START_MD -> %d"
+                % fcntl.ioctl(mon_fd, CCCI_IOC_DO_START_MD, 0))
+        except OSError as e:
+            log("MDRECOVER: DO_START_MD failed: %s" % e)
+    # 3b) PEARL-MDRECOVER-3: re-write the CCB control headers.  The stock AP
+    # builds them before the modem runs its cccisrv_task_init (owner v451 does
+    # the same on the first boot).  After a restart the modem re-runs that init,
+    # so the headers must be rebuilt or it parks in BOOTING and never reaches
+    # HS1.
+    try:
+        log("MDRECOVER: ccb_init() -> %s" % ccb_init())
+    except Exception as e:
+        log("MDRECOVER: ccb_init() raised: %s" % e)
+    # 3c) PEARL-SIMLOCK-1: re-arm the SIM-lock random pattern message
+    try:
+        _b = bytearray(struct.pack("<I", 0))
+        fcntl.ioctl(mon_fd, CCCI_IOC_SIM_LOCK_RANDOM_PATTERN, _b, True)
+        log("MDRECOVER: SIM_LOCK_RANDOM_PATTERN re-sent")
+    except OSError as e:
+        log("MDRECOVER: SIM_LOCK_RANDOM_PATTERN failed: %s" % e)
+    # 4) re-send the boot-time context stock re-sends
+    time.sleep(1.0)
+    try:
+        _buf = bytearray(struct.pack("<I", 0))
+        fcntl.ioctl(mon_fd, CCCI_IOC_SET_BOOT_DATA, _buf, True)
+        log("MDRECOVER: SET_BOOT_DATA re-sent")
+    except OSError as e:
+        log("MDRECOVER: SET_BOOT_DATA failed: %s" % e)
+    for _name, _cmd in (("SEND_BATTERY_INFO", CCCI_IOC_SEND_BATTERY_INFO),
+                        ("SEND_RUNTIME_DATA", CCCI_IOC_SEND_RUNTIME_DATA)):
+        try:
+            log("MDRECOVER: %s -> %d" % (_name, fcntl.ioctl(mon_fd, _cmd, 0)))
+        except OSError as e:
+            log("MDRECOVER: %s failed: %s" % (_name, e))
+
+
+def simlock_sender():
+    """PEARL-SIMLOCK-1: periodically deliver CCCI_MD_MSG_RANDOM_PATTERN.
+
+    The modem's custom_nvram_sec security check runs shortly after READY; the
+    stock AP triggers the message via CCCI_IOC_SIM_LOCK_RANDOM_PATTERN.  Send it
+    from boot through READY (and after every restart) so the modem always has
+    it.  The kernel ignores the argument, so the value is irrelevant.
+    """
+    try:
+        libc.prctl(15, b"ccci_mdinit", 0, 0, 0)
+    except Exception:
+        pass
+    _buf = bytearray(struct.pack("<I", 0))
+    _n = 0
+    _t0 = time.time()
+    while time.time() - _t0 < 300:
+        try:
+            fcntl.ioctl(mon_fd, CCCI_IOC_SIM_LOCK_RANDOM_PATTERN, _buf, True)
+            _n += 1
+            if _n <= 5 or _n % 20 == 0:
+                log("SIMLOCK: sent CCCI_MD_MSG_RANDOM_PATTERN #%d" % _n)
+        except OSError as e:
+            if _n == 0:
+                log("SIMLOCK: ioctl failed: %s" % e)
+        time.sleep(1.0)
+    log("SIMLOCK: done, sent %d" % _n)
+
+
+threading.Thread(target=simlock_sender, daemon=True, name="simlock").start()
+
+
+def md_supervisor():
+    global ipc_fd
+    # PEARL-MDRECOVER-7 -- THE fix.
+    #
+    # ccci_fsm_ioctl.c:409 has  char *VALID_USER = "ccci_mdinit";  and the
+    # CCCI_IOC_DO_START_MD handler does
+    #     if (strncmp(current->comm, VALID_USER, strlen(VALID_USER)) == 0)
+    #         fsm_append_command(ctl, CCCI_COMMAND_START, 0);
+    #     else
+    #         CCCI_ERROR_LOG(..., "drop invalid user:%s call MD start ioctl\n", ...);
+    # current->comm is the *thread* name, not the process name.  The owner's main
+    # thread renames itself to "ccci_mdinit" with prctl(PR_SET_NAME) (see the
+    # module header), which is why the initial DO_START_MD works.  This
+    # supervisor runs in its own thread whose comm is "md_supervisor", so every
+    # recovery DO_START_MD was silently DROPPED:
+    #     [ccci1/fsm]drop invalid user:md_supervisor call MD start ioctl
+    # The modem therefore never restarted and parked in BOOTING forever.
+    # threading.Thread(name=...) only sets the Python-side name; the OS comm
+    # must be set from inside the thread with prctl.
+    try:
+        libc.prctl(15, b"ccci_mdinit", 0, 0, 0)   # PR_SET_NAME = 15
+    except Exception as e:
+        log("MDRECOVER: prctl(PR_SET_NAME) failed: %s" % e)
+    _t0 = time.time()
+    while time.time() - _t0 < 120:      # wait for the first READY/EXCEPTION
+        _st = _md_user_state()
+        if _st in (MD_STATE_READY, MD_STATE_EXCEPTION):
+            break
+        time.sleep(1)
+    _n = 0
+    while _n < 100:      # PEARL-MDRECOVER-9: 提高上限，便于抓 MD 窗口
+        _st = _md_user_state()
+        if _st == MD_STATE_EXCEPTION:
+            _n += 1
+            recover_md(_n)
+            time.sleep(8)      # give the FSM's own restart time to progress
+            if ipc_fd is not None:
+                try:
+                    fcntl.ioctl(ipc_fd, CCCI_IPC_UPDATE_TIMEZONE, MD_TIME_TZ)
+                    fcntl.ioctl(ipc_fd, CCCI_IPC_UPDATE_TIME, MD_TIME_TZ)
+                    log("MDRECOVER: time re-sent")
+                except OSError as e:
+                    log("MDRECOVER: time re-send failed: %s" % e)
+        else:
+            time.sleep(2)
+    log("MDRECOVER: gave up after %d attempts (md_state=%d)" % (_n, _st))
+
+
+threading.Thread(target=md_supervisor, daemon=True,
+                 name="md_supervisor").start()
 
 signal.signal(signal.SIGTERM, bye)
 signal.signal(signal.SIGINT, bye)

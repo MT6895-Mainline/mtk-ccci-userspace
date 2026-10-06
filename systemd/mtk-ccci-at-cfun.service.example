@@ -1,0 +1,18 @@
+[Unit]
+Description=MediaTek CCCI: modem full functionality (AT+CFUN=1 and RAT)
+Documentation=file:/usr/share/doc/mtk-ccci-userspace/PEARL.md
+After=mtk-ccci-owner.service
+Before=ModemManager.service
+Wants=mtk-ccci-owner.service
+ConditionPathExists=/dev/ttyCCCI0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/default/mtk-ccci
+ExecStart=/usr/bin/python3 /usr/libexec/mtk-ccci/at_cfun.py
+# 等基带 READY + 切 CFUN=1 + 等 SIM 上电；冷启动实测 10-40 秒
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

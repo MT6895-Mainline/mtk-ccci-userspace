@@ -1,0 +1,21 @@
+[Unit]
+Description=MediaTek CCCI: bring up mobile data (PDP + ccmni)
+Documentation=file:/usr/share/doc/mtk-ccci-userspace/PEARL.md
+After=mtk-ccci-at-cfun.service
+Before=ModemManager.service
+Wants=mtk-ccci-at-cfun.service
+ConditionPathExists=/dev/ttyCCCI0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/default/mtk-ccci
+ExecStart=/usr/bin/python3 /usr/libexec/mtk-ccci/data_up.py
+# 等注册 + 激活 + ping 验证 + 换 cid 重试，实测冷启动 20-90 秒
+TimeoutStartSec=900
+# 失败（例如网络还没注册好）就过一会儿重试
+Restart=on-failure
+RestartSec=20
+
+[Install]
+WantedBy=multi-user.target

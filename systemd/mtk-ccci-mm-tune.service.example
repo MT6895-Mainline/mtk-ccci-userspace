@@ -1,0 +1,16 @@
+[Unit]
+Description=MediaTek CCCI: enable ModemManager signal polling
+Documentation=file:/usr/share/doc/mtk-ccci-userspace/PEARL.md
+After=ModemManager.service mtk-ccci-at-cfun.service
+Wants=ModemManager.service
+PartOf=ModemManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/default/mtk-ccci
+ExecStart=/usr/bin/python3 /usr/libexec/mtk-ccci/mm_tune.py
+TimeoutStartSec=360
+
+[Install]
+WantedBy=multi-user.target

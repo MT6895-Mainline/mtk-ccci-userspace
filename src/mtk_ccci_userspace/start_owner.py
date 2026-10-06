@@ -52,6 +52,61 @@ def preflight():
         raise RuntimeError("running kernel differs from the pinned board integration")
     if hashlib.sha256(Path("/sys/kernel/notes").read_bytes()).hexdigest() != expected_notes:
         raise RuntimeError("running kernel notes differ from the pinned board integration")
+    # PEARL-MDRECOVER-10: bring a non-idle modem back to md1:0 instead of
+    # refusing to start.  Without this, any abnormal owner exit leaves the modem
+    # in BOOTING/EXCEPTION and every subsequent start needs a full device reboot.
+    # CCCI_IOC_DO_STOP_MD = _IO('C', 12) = 0x430C; fsm_routine_stop() accepts
+    # EXCEPTION and ends at CCCI_FSM_GATED (md1:0).
+    try:
+        _st = Path("/sys/kernel/ccci/boot").read_text().split("|", 1)[0].strip()
+        if _st != "md1:0":
+            import fcntl as _f, struct as _s, time as _t
+            print("owner: modem is %s -> issuing DO_STOP_MD to return to idle" % _st,
+                  file=sys.stderr)
+            def _idle():
+                return Path("/sys/kernel/ccci/boot").read_text().split(
+                    "|", 1)[0].strip() == "md1:0"
+
+            _fd = os.open("/dev/ccci_monitor", os.O_RDWR)
+            try:
+                # Escalating recovery.  From BOOTING(1)/EXCEPTION(5) a plain
+                # DO_STOP_MD does not return the FSM to GATED, so try the reset
+                # paths the MDRECOVER work established, then stop again.
+                #   CCCI_IOC_DO_STOP_MD      = _IO('C', 12) = 0x430C
+                #   CCCI_IOC_MD_RESET        = _IO('C',  0) = 0x4300
+                #   CCCI_IOC_DO_MD_RST       = _IO('C',  6) = 0x4306
+                #   RESET_MD1_MD3_PCCIF      = _IO('C', 45) = 0x432D
+                for _name, _cmd in (("DO_STOP_MD", 0x430C),
+                                    ("MD_RESET", 0x4300),
+                                    ("DO_MD_RST", 0x4306),
+                                    ("RESET_MD1_MD3_PCCIF", 0x432D),
+                                    ("DO_STOP_MD#2", 0x430C)):
+                    if _idle():
+                        break
+                    try:
+                        _b = bytearray(_s.pack("<I", 0))
+                        _f.ioctl(_fd, _cmd, _b, True)
+                        print("owner: recovery ioctl %s ok" % _name,
+                              file=sys.stderr)
+                    except OSError as _e:
+                        print("owner: recovery ioctl %s failed: %s" % (_name, _e),
+                              file=sys.stderr)
+                    for _i in range(20):
+                        if _idle():
+                            break
+                        _t.sleep(0.5)
+            finally:
+                os.close(_fd)
+            for _i in range(40):
+                if _idle():
+                    break
+                _t.sleep(0.5)
+            print("owner: modem now %s" %
+                  Path("/sys/kernel/ccci/boot").read_text().split("|", 1)[0].strip(),
+                  file=sys.stderr)
+    except Exception as _e:
+        print("owner: non-idle recovery error: %s" % _e, file=sys.stderr)
+
     state = Path("/sys/kernel/ccci/boot").read_text().split("|", 1)[0].strip()
     if state != "md1:0":
         raise RuntimeError(f"refusing to boot a non-idle or already-owned modem: {state}")

@@ -1,0 +1,16 @@
+# 让 ModemManager 认识 CCCI AT 通道（/dev/ttyCCCI0）。
+#
+# 这些属性是 ModemManager 对非 USB/虚拟串口的官方入口：只要 udev 打上标，
+# MM 就会把它当普通 AT 口处理，不需要改 ModemManager 源码。
+#
+# 注意：
+#   * 不要在这里设 ENV{DRIVER}——udev 不允许规则设置 DRIVER，会导致整条规则失效。
+#   * MM 需要的“驱动名”来自 sysfs 父设备，所以内核侧必须给 tty 一个真实的
+#     platform 父设备（见 kernel/README.md 的 port_tty 驱动）。
+#   * ID_MM_DEVICE_PROCESS=1 是显式白名单，用来越过 MM 的
+#     “port filtered: virtual device” 过滤（内核侧已给父设备，这里是双保险）。
+SUBSYSTEM=="tty", KERNEL=="ttyCCCI0", ENV{ID_MM_CANDIDATE}="1"
+SUBSYSTEM=="tty", KERNEL=="ttyCCCI0", ENV{ID_MM_DEVICE_PROCESS}="1"
+SUBSYSTEM=="tty", KERNEL=="ttyCCCI0", ENV{ID_MM_PORT_TYPE_AT_PRIMARY}="1"
+SUBSYSTEM=="tty", KERNEL=="ttyCCCI0", ENV{ID_MM_TTY_FLOW_CONTROL}="none"
+SUBSYSTEM=="tty", KERNEL=="ttyCCCI0", ENV{MTK_CCCI_AT}="1"
