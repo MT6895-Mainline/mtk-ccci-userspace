@@ -105,10 +105,13 @@ ModemManager is **stock** — no source changes, no plugin.  Integration is:
 With this, MM reports `state: registered`, `operator: China Mobile`,
 `access tech: lte|5gnr`, `packet service: attached` and signal quality.
 
-Known limitation: MM's generic plugin would bring data up with PPP, which MTK
-does not use, so MM is *not* the data manager here.  That is why
-`data_up.py` exists; a native MM `mtk-soc` plugin (maintained separately) would
-be the clean long-term answer and would let NetworkManager/Phosh own the bearer.
+The `mtk-soc` plugin from `MT6895-Mainline/modemmanager-mtk-soc` now owns both
+the control plane and the data plane: it activates the PDP over **MIPC
+direct-IP** (`/dev/ttyCMIPC1`), which is an independent CCCI channel, and hands
+the static IPv4 configuration to NetworkManager.  Verified on hardware:
+`plugin: mtk-soc`, `state: connected`, 22 ports, `ccmni0` configured by NM,
+traffic flowing with WiFi off.  `data_up.py` remains as the fallback for a
+stock ModemManager; see `docs/MODEMANAGER.md`.
 
 ## 5. RAT and 5G
 

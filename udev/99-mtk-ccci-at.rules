@@ -1,4 +1,4 @@
-# 让 ModemManager 认识 CCCI AT 通道（/dev/ttyCCCI0）。
+# 让 ModemManager 认识 CCCI AT 通道（/dev/ttyCCCI0）并归到 mtk-soc 插件。
 #
 # 这些属性是 ModemManager 对非 USB/虚拟串口的官方入口：只要 udev 打上标，
 # MM 就会把它当普通 AT 口处理，不需要改 ModemManager 源码。
@@ -9,8 +9,13 @@
 #     platform 父设备（见 kernel/README.md 的 port_tty 驱动）。
 #   * ID_MM_DEVICE_PROCESS=1 是显式白名单，用来越过 MM 的
 #     “port filtered: virtual device” 过滤（内核侧已给父设备，这里是双保险）。
+#   * ID_MM_MTK_SOC / ID_MM_PHYSDEV_UID 是 mtk-soc 插件选插件、把 AT 口和
+#     ccmni 网卡归到同一个 modem 的依据。插件自带的规则靠 DRIVERS=="ccci_tty"
+#     匹配，而本内核的驱动叫 ccci_at_tty，且 ninja install 会覆盖那个规则文件，
+#     所以在这里显式打标（不依赖驱动名，重装 MM 也不会丢）。
 SUBSYSTEM=="tty", KERNEL=="ttyCCCI0", ENV{ID_MM_CANDIDATE}="1"
 SUBSYSTEM=="tty", KERNEL=="ttyCCCI0", ENV{ID_MM_DEVICE_PROCESS}="1"
 SUBSYSTEM=="tty", KERNEL=="ttyCCCI0", ENV{ID_MM_PORT_TYPE_AT_PRIMARY}="1"
 SUBSYSTEM=="tty", KERNEL=="ttyCCCI0", ENV{ID_MM_TTY_FLOW_CONTROL}="none"
 SUBSYSTEM=="tty", KERNEL=="ttyCCCI0", ENV{MTK_CCCI_AT}="1"
+SUBSYSTEM=="tty", KERNEL=="ttyCCCI0", ENV{ID_MM_MTK_SOC}="1", ENV{ID_MM_PHYSDEV_UID}="mtk-soc-ccci-md1"

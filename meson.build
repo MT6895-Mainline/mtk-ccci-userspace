@@ -24,11 +24,18 @@ install_data(
   'systemd/ModemManager.service.d-10-pearl-ccci.conf.example',
   'config/mtk-ccci.env.example',
   'config/mtk-ccci-data.conf.example',
+  'udev/98-mtk-ccci-net.rules',
   'udev/99-mtk-ccci-at.rules',
   'docs/PEARL.md',
+  'docs/MODEMANAGER.md',
   install_dir: ccci_share,
 )
 
 test('offline-protocols', python,
   args: [meson.current_source_dir() / 'tests/test_runner.py'],
+)
+
+install_data(
+  'tools/mipc-test.py',
+  install_dir: ccci_share / 'tools',
 )

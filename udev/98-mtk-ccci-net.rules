@@ -1,0 +1,7 @@
+# ccmni 是 MTK 的数据网卡：让 ModemManager 接纳它们，并与 AT 口归到同一个 modem。
+#
+# 插件自带的 77-mm-mtk-soc.rules 只打 ID_MM_MTK_SOC / ID_MM_PHYSDEV_UID，
+# 但 ModemManager 还需要显式白名单（ID_MM_DEVICE_PROCESS=1）才会处理这些网卡，
+# 否则报 "Failed to find a data port in the modem" 并回落到 generic 插件。
+SUBSYSTEM=="net", KERNEL=="ccmni[0-9]*", ENV{ID_MM_CANDIDATE}="1"
+SUBSYSTEM=="net", KERNEL=="ccmni[0-9]*", ENV{ID_MM_DEVICE_PROCESS}="1"

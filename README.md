@@ -36,6 +36,13 @@ signal polling (`mm_tune.py`), the matching systemd/udev examples, and
 `docs/PEARL.md` with the observed root causes (data-path HIF, APN, activation
 timing, NetworkManager churn) plus the current voice/IMS status.
 
+Data is normally owned by the `mtk-soc` plugin of
+`MT6895-Mainline/modemmanager-mtk-soc`, which activates the PDP over **MIPC
+direct-IP** (`/dev/ttyCMIPC1`) and lets NetworkManager configure `ccmni0`;
+`data_up.py` is the fallback for a stock ModemManager.  See
+`docs/MODEMANAGER.md` for the build, the two udev traps and
+`tools/mipc-test.py`, a standalone MIPC handshake checker.
+
 Set `MTK_CCCI_BOARD=pearl`, `MTK_CCCI_RAT=15` (enables NR on this firmware) and
 configure `/etc/mtk-ccci/data.conf` with the operator APN.
 
