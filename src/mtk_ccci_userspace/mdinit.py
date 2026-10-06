@@ -2544,12 +2544,37 @@ log("SET_BOOT_DATA ret = %d"
 #   _IOR('C', 26, unsigned int) = 0x8004431a   GET_SIM_TYPE
 CCCI_IOC_UPDATE_SIM_SLOT_CFG = 0x40044326
 CCCI_IOC_GET_SIM_TYPE = 0x8004431A
+# PEARL-SIMCFG-1: v560 sent [1, 0, 0, 0] on purpose (it did not want to invent
+# a SIM mode), but the MD is then told "sim_mode 0, both slots mode 0" -- which
+# is not a description of this board: two cards are inserted and both are
+# GSM/LTE.  The observable consequences of the all-zero config are that the MD
+# never reports a SIM hot-plug and that slot switching has no effect.
+#
+# struct ccci_sim_setting { sim_mode; slot1_mode; slot2_mode; }
+#   slotN_mode: 0:CDMA 1:GSM 2:WCDMA 3:TDCDMA
+# sim_mode is not documented in the OSS drop; it is kept configurable so the
+# right value can be found by experiment instead of being hard-coded.
+def _simcfg_value(name, default):
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw, 0)
+    except ValueError:
+        log("%s=%r is not an integer, using %d" % (name, raw, default))
+        return default
+
+
+_sim_mode = _simcfg_value("MTK_CCCI_SIM_MODE", 1)
+_slot1 = _simcfg_value("MTK_CCCI_SIM_SLOT1", 1)
+_slot2 = _simcfg_value("MTK_CCCI_SIM_SLOT2", 1)
 try:
-    simcfg = bytearray(struct.pack("<4I", 1, 0, 0, 0))
-    log("v560 SIM_SLOT_CFG ret = %d"
-        % fcntl.ioctl(mon_fd, CCCI_IOC_UPDATE_SIM_SLOT_CFG, simcfg, True))
+    simcfg = bytearray(struct.pack("<4I", 1, _sim_mode, _slot1, _slot2))
+    log("PEARL-SIMCFG SIM_SLOT_CFG send [1, %d, %d, %d] ret = %d"
+        % (_sim_mode, _slot1, _slot2,
+           fcntl.ioctl(mon_fd, CCCI_IOC_UPDATE_SIM_SLOT_CFG, simcfg, True)))
 except OSError as e:
-    log("v560 SIM_SLOT_CFG failed: %s" % e)
+    log("PEARL-SIMCFG SIM_SLOT_CFG failed: %s" % e)
 try:
     _sb = bytearray(4)
     fcntl.ioctl(mon_fd, CCCI_IOC_GET_SIM_TYPE, _sb, True)
